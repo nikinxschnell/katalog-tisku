@@ -1,3 +1,4 @@
+
 import os
 from flask import Flask, render_template_string, request
 import requests
@@ -11,47 +12,40 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zebra Ctecka</title>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 10px; background: #f4f4f9; }
-        .container { max-width: 400px; margin: auto; }
-        .card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-        input { width: 100%; padding: 15px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; font-size: 1.2rem; box-sizing: border-box; }
-        button { width: 100%; padding: 15px; background: #002d5a; color: white; border: none; border-radius: 5px; font-size: 1.1rem; font-weight: bold; cursor: pointer; }
-        .result-item { background: #eef2f7; padding: 10px; border-radius: 5px; margin-top: 10px; border-left: 5px solid #002d5a; }
-        .date-box { display: flex; justify-content: space-between; margin-top: 5px; }
-        .date-label { font-size: 0.8rem; color: #666; }
-        .date-val { font-weight: bold; font-size: 1rem; }
+        .card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); max-width: 400px; margin: auto; }
+        input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 5px; font-size: 1.1rem; box-sizing: border-box; }
+        button { width: 100%; padding: 15px; background: #E30613; color: white; border: none; border-radius: 5px; font-size: 1.1rem; font-weight: bold; }
+        .result-item { background: #fff; padding: 12px; border-radius: 8px; margin-top: 10px; border-left: 6px solid #E30613; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .date-val { font-weight: bold; color: #333; }
+        .error { color: red; font-weight: bold; margin-top: 10px; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="card">
-            <h2 style="margin-top:0">Pípni titul</h2>
-            <form method="POST">
-                <input type="number" name="ean" placeholder="EAN (pípni)" autofocus required>
-                <input type="text" name="vydani" placeholder="Vydání (např. 02)" required>
-                <button type="submit">HLEDAT</button>
-            </form>
-        </div>
+    <div class="card">
+        <h2 style="margin:0 0 10px 0; color:#002d5a">Čtečka Tisku</h2>
+        <form method="POST">
+            <input type="number" name="ean" placeholder="Pípni EAN" autofocus required>
+            <input type="text" name="vydani" placeholder="Číslo (např. 02)" required>
+            <button type="submit">VYHLEDAT</button>
+        </form>
 
         {% if title %}
-        <div style="margin-top: 20px;">
-            <strong style="font-size: 1.2rem;">{{ title }}</strong>
+            <hr>
+            <div style="font-weight:bold; font-size: 1.2rem; margin-bottom:10px;">{{ title }}</div>
             {% if results %}
                 {% for r in results %}
                 <div class="result-item">
                     <div>Vydání: <strong>{{ r.vydani }}</strong></div>
-                    <div class="date-box">
-                        <div><div class="date-label">NÁVOZ</div><div class="date-val">{{ r.navoz }}</div></div>
-                        <div><div class="date-label">REMITENDA</div><div class="date-val" style="color: #d9534f;">{{ r.remitenda }}</div></div>
-                    </div>
+                    <div style="margin-top:5px">PŘIŠLO: <span class="date-val">{{ r.navoz }}</span></div>
+                    <div>VRACÍ SE: <span class="date-val" style="color:red">{{ r.remitenda }}</span></div>
                 </div>
                 {% endfor %}
             {% else %}
-                <p>Pro vydání {{ query_vydani }} nebyl nalezen žádný termín.</p>
+                <div class="error">Pro číslo "{{ query_vydani }}" nic nenalezeno.</div>
+                <p style="font-size:0.8rem">Zkus zadat jen jednu číslici nebo zkontroluj EAN.</p>
             {% endif %}
-        </div>
         {% endif %}
     </div>
 </body>
@@ -63,40 +57,33 @@ def index():
     results = []
     title = ""
     query_vydani = ""
-    
     if request.method == 'POST':
-        ean = request.form.get('ean')
-        query_vydani = request.form.get('vydani')
-        
+        ean = request.form.get('ean').strip()
+        query_vydani = request.form.get('vydani').strip()
         try:
-            # Hledání v katalogu Mediaprint Kapa
+            # Hledání v katalogu MPK
             url = f"https://www.mediaprintkapa.cz/katalog-tisku/?search={ean}"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            resp = requests.get(url, headers=headers)
+            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             soup = BeautifulSoup(resp.content, 'html.parser')
             
-            # Najdeme název
-            h1 = soup.find('h1')
-            title = h1.text.strip() if h1 else "Titul nenalezen"
+            title_tag = soup.find('h1')
+            title = title_tag.text.strip() if title_tag else "Titul nenalezen"
             
-            # Projdeme tabulku a hledáme všechny shody s číslem vydání
             table = soup.find('table', {'class': 'katalog-tisku'})
             if table:
-                rows = table.find_all('tr')[1:] # Přeskočíme hlavičku
-                for row in rows:
+                for row in table.find_all('tr')[1:]:
                     cols = row.find_all('td')
                     if len(cols) >= 6:
-                        vydani_text = cols[1].text.strip()
-                        # Kontrola, zda se v textu vydání vyskytuje naše číslo (např. "02/2026")
-                        if query_vydani in vydani_text:
+                        vydani_web = cols[1].text.strip()
+                        # Hledáme, zda se naše číslo vydání nachází v textu z webu
+                        if query_vydani in vydani_web:
                             results.append({
-                                "vydani": vydani_text,
+                                "vydani": vydani_web,
                                 "navoz": cols[2].text.strip(),
                                 "remitenda": cols[5].text.strip()
                             })
         except Exception as e:
             title = f"Chyba: {str(e)}"
-
     return render_template_string(HTML_TEMPLATE, results=results, title=title, query_vydani=query_vydani)
 
 if __name__ == '__main__':
