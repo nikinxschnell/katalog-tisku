@@ -1,9 +1,8 @@
-
-
 import os
 from flask import Flask, render_template_string, request
 import requests
 from bs4 import BeautifulSoup
+import re
 
 app = Flask(__name__)
 
@@ -13,102 +12,91 @@ HTML_TEMPLATE = """
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: sans-serif; padding: 10px; background: #f0f0f0; margin: 0; }
-        .box { background: white; padding: 15px; border-radius: 8px; max-width: 450px; margin: 10px auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        input { width: 100%; padding: 15px; margin: 5px 0; box-sizing: border-box; font-size: 1.1rem; border: 1px solid #ccc; border-radius: 5px; }
+        body { font-family: sans-serif; padding: 10px; background: #f4f4f9; }
+        .box { background: white; padding: 15px; border-radius: 10px; max-width: 450px; margin: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        input { width: 100%; padding: 12px; margin: 5px 0; box-sizing: border-box; font-size: 1.1rem; border: 1px solid #ccc; border-radius: 5px; }
         button { width: 100%; padding: 15px; background: #002d5a; color: white; border: none; border-radius: 5px; font-weight: bold; font-size: 1.1rem; cursor: pointer; }
-        .res { margin-top: 15px; padding: 12px; border-left: 6px solid #E30613; background: #f9f9f9; border-radius: 4px; box-shadow: inset 0 0 5px rgba(0,0,0,0.05); }
-        .source { font-size: 0.7rem; color: #999; text-transform: uppercase; margin-bottom: 5px; }
+        .res { margin-top: 15px; padding: 12px; border-left: 6px solid #E30613; background: #fff; border-radius: 5px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .title { font-size: 1.2rem; font-weight: bold; color: #002d5a; margin-bottom: 10px; }
+        .debug { font-size: 0.7rem; color: #999; margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px; }
     </style>
 </head>
 <body>
     <div class="box">
         <form method="POST">
-            <input type="number" name="ean" placeholder="Pípni EAN" value="{{ request.form.get('ean', '') }}" autofocus required>
-            <input type="text" name="vydani" placeholder="Číslo (např. 02 nebo 9)" value="{{ request.form.get('vydani', '') }}" required>
-            <button type="submit">HLEDAT TERMÍNY</button>
+            <input type="text" name="ean" placeholder="Pípni EAN" value="{{ ean }}" autofocus required>
+            <input type="text" name="vydani" placeholder="Číslo (např. 09)" value="{{ query_vydani }}" required>
+            <button type="submit">HLEDAT</button>
         </form>
 
         {% if title or results %}
             <div style="margin-top: 20px;">
-                <div class="title">{{ title if title else "Výsledky hledání" }}</div>
-                
-                {% if results %}
-                    {% for r in results %}
-                    <div class="res">
-                        <div class="source">Zdroj: {{ r.source }}</div>
-                        <strong>Vydání: {{ r.vydani }}</strong><br>
-                        PŘIŠLO: <b>{{ r.navoz }}</b><br>
-                        REMITENDA: <span style="color:red; font-weight:bold">{{ r.remitenda }}</span>
-                    </div>
-                    {% endfor %}
-                {% else %}
-                    <p style="color:red;">Pro číslo "{{ query_vydani }}" nebyly nalezeny žádné konkrétní termíny. Zkontroluj, zda je titul v aktuální nabídce.</p>
+                <div class="title">{{ title }}</div>
+                {% for r in results %}
+                <div class="res">
+                    <strong>Vydání: {{ r.vydani }}</strong><br>
+                    NÁVOZ: <b>{{ r.navoz }}</b><br>
+                    REMITENDA: <span style="color:red; font-weight:bold">{{ r.remitenda }}</span>
+                </div>
+                {% endfor %}
+                {% if not results %}
+                    <p style="color:red;">Číslo "{{ query_vydani }}" nenalezeno. Zkus zadat jen "{{ query_vydani.lstrip('0') }}".</p>
                 {% endif %}
             </div>
+        {% endif %}
+        
+        {% if debug_info %}
+        <div class="debug">
+            <strong>Nalezená vydání na webu:</strong> {{ debug_info }}
+        </div>
         {% endif %}
     </div>
 </body>
 </html>
 """
 
-def get_data(ean, query_vydani):
-    results = []
-    found_title = ""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    
-    # --- MEDIAPRINT KAPA ---
-    try:
-        mpk_url = f"https://www.mediaprintkapa.cz/katalog-tisku/?search={ean}"
-        r = requests.get(mpk_url, headers=headers, timeout=8)
-        soup = BeautifulSoup(r.content, 'html.parser')
-        
-        if not found_title:
-            h1 = soup.find('h1')
-            if h1: found_title = h1.text.strip()
-
-        table = soup.find('table', {'class': 'katalog-tisku'})
-        if table:
-            for row in table.find_all('tr')[1:]:
-                cols = row.find_all('td')
-                if len(cols) >= 6:
-                    v_text = cols[1].text.strip()
-                    if query_vydani.lower() in v_text.lower() or query_vydani.lstrip('0') in v_text:
-                        results.append({
-                            "source": "Mediaprint",
-                            "vydani": v_text,
-                            "navoz": cols[2].text.strip(),
-                            "remitenda": cols[5].text.strip()
-                        })
-    except: pass
-
-    # --- PNS ---
-    try:
-        pns_url = f"https://www.pns.cz/katalog-tisku?query={ean}"
-        r = requests.get(pns_url, headers=headers, timeout=8)
-        soup = BeautifulSoup(r.content, 'html.parser')
-        
-        # PNS má tituly v kartách/seznamu
-        items = soup.select('.catalog-item') # Toto se může lišit dle struktury PNS
-        for item in items:
-            # PNS vyžaduje komplexnější scrapování, přidáme základní detekci názvu
-            if not found_title:
-                t = item.select_one('.catalog-item__title')
-                if t: found_title = t.text.strip()
-    except: pass
-
-    return found_title, results
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    title, results, query_vydani = "", [], ""
+    results, title, ean, query_vydani, debug_info = [], "", "", "", ""
     if request.method == 'POST':
         ean = request.form.get('ean', '').strip()
         query_vydani = request.form.get('vydani', '').strip()
-        title, results = get_data(ean, query_vydani)
+        
+        try:
+            # Mediaprint Kapa
+            url = f"https://www.mediaprintkapa.cz/katalog-tisku/?search={ean}"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.content, 'html.parser')
             
-    return render_template_string(HTML_TEMPLATE, title=title, results=results, query_vydani=query_vydani)
+            h1 = soup.find('h1')
+            title = h1.text.strip() if h1 else "Titul nenalezen"
+            
+            all_vydani = []
+            # Prohledáme všechny tabulky na stránce
+            tables = soup.find_all('table')
+            for table in tables:
+                rows = table.find_all('tr')
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 5:
+                        v_text = cols[1].text.strip()
+                        all_vydani.append(v_text)
+                        
+                        # Porovnání: zkusíme shodu čísla (např. "09" v "09/2024")
+                        clean_q = query_vydani.lstrip('0')
+                        if query_vydani in v_text or (clean_q and clean_q in v_text):
+                            results.append({
+                                "vydani": v_text,
+                                "navoz": cols[2].text.strip(),
+                                "remitenda": cols[5].text.strip() if len(cols) > 5 else "Nezadáno"
+                            })
+            debug_info = ", ".join(list(set(all_vydani)))
+        except Exception as e:
+            title = f"Chyba: {str(e)}"
+            
+    return render_template_string(HTML_TEMPLATE, results=results, title=title, ean=ean, query_vydani=query_vydani, debug_info=debug_info)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+
